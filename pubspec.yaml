@@ -1,0 +1,5 @@
+dependencies:
+  flutter:
+    sdk: flutter
+  nearby_connections: ^5.1.0 # Ekti mesh supportable version
+  uuid: ^4.3.3 # Unique ID generate korar jonno
