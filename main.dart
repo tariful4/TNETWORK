@@ -1,18 +1,19 @@
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 import 'package:uuid/uuid.dart';
 
-void main() => runApp(const MeshApp());
+void main() => runApp(const TNetApp());
 
-class MeshApp extends StatelessWidget {
-  const MeshApp({super.key});
+class TNetApp extends StatelessWidget {
+  const TNetApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
-      home: MeshScreen(),
+    return MaterialApp(
+      title: 'TNET - Offline Mesh',
+      theme: ThemeData.dark(), // Dark mode for cool dev vibes
+      home: const MeshScreen(),
     );
   }
 }
@@ -25,168 +26,193 @@ class MeshScreen extends StatefulWidget {
 }
 
 class _MeshScreenState extends State<MeshScreen> {
-  final String myUniqueId = const Uuid().v4().substring(0, 8); // Example Unique ID
-  final Strategy strategy = Strategy.P2P_CLUSTER; // Hajar hajar device connect korar jonno ideal
+  // 1. Unique ID initialization
+  final String myUniqueId = const Uuid().v4().substring(0, 8).toUpperCase();
+  final Strategy strategy = Strategy.P2P_CLUSTER; // Supports multi-endpoint mesh
   
-  // Connected direct neighbors track korar jonno
-  Map<String, String> connectedDevices = {}; 
-  List<String> messages = [];
+  Map<String, String> connectedNeighbors = {}; 
+  List<String> chatHistory = [];
   
+  // Infinite loop atkanor jonno Message Cache map
+  // Key: messageId, Value: true (Otheba timestamp)
+  Map<String, bool> processedMessages = {};
+
   final TextEditingController _msgController = TextEditingController();
   final TextEditingController _targetIdController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    checkPermissions();
-    startMeshNetwork();
+    requestPermissions();
+    activateMeshNetwork();
   }
 
-  // Bluetooth, Location permission check (Mesh network er jonno must)
-  void checkPermissions() async {
-    bool hasLocation = await Nearby().checkLocationPermission();
-    if (!hasLocation) {
-      await Nearby().askLocationPermission();
-    }
+  void requestPermissions() async {
+    await Nearby().askLocationPermission();
+    // Android 12+ er jonno Bluetooth permissions lagte pare
   }
 
-  // Network shuru kora - Advertising and Discovering eksathe chalano
-  void startMeshNetwork() async {
+  void activateMeshNetwork() async {
     try {
-      // 1. Advertise kora (Nijeke onnor kache drisshomankora)
+      // Background-e nijer discovery identity open rakha
       await Nearby().startAdvertising(
         myUniqueId,
         strategy,
-        onConnectionInitiated: onConnectionInitiated,
+        onConnectionInitiated: onConnectionSetup,
         onConnectionResult: (id, status) {
           if (status == Status.CONNECTED) {
-            setState(() => connectedDevices[id] = id);
+            setState(() => connectedNeighbors[id] = id);
           }
         },
         onDisconnected: (id) {
-          setState(() => connectedDevices.remove(id));
+          setState(() => connectedNeighbors.remove(id));
         },
       );
 
-      // 2. Discover kora (Alpaser onno device khoja)
+      // Alpaser onno device automatic khuje connect kora
       await Nearby().startDiscovery(
         myUniqueId,
         strategy,
         onDeviceFound: (id, name, serviceId) {
-          // Automatic connection request pathano
-          Nearby().requestConnection(
-            myUniqueId,
-            id,
-            onConnectionInitiated: onConnectionInitiated,
-          );
+          Nearby().requestConnection(myUniqueId, id, onConnectionInitiated: onConnectionSetup);
         },
         onDeviceLost: (id) {},
       );
     } catch (e) {
-      print("Error starting mesh: $e");
+      debugPrint("Mesh Network Error: $e");
     }
   }
 
-  // Connection process handler
-  void onConnectionInitiated(String id, ConnectionInfo info) {
-    // Automatic accept connection
+  void onConnectionSetup(String id, ConnectionInfo info) {
+    // Kono manual tap charai automatic mesh peer accept hobe
     Nearby().acceptConnection(
       id,
       onPayloadReceived: (endId, payload) {
         if (payload.type == PayloadType.BYTES) {
-          String jsonStr = utf8.decode(payload.bytes!);
-          handleIncomingMessage(jsonStr);
+          String rawJson = utf8.decode(payload.bytes!);
+          processMeshPacket(rawJson);
         }
       },
     );
   }
 
-  // Routing Logic: Message nije rakha naki agiye dewa (Hop kora)
-  void handleIncomingMessage(String jsonStr) {
-    Map<String, dynamic> data = jsonDecode(jsonStr);
-    String target = data['target'];
-    String sender = data['sender'];
-    String body = data['body'];
-    String msgId = data['msgId'];
+  // --- FLOOD ROUTING PROTOCOL (Dhaka to Jessore Logic) ---
+  void processMeshPacket(String rawJson) {
+    try {
+      Map<String, dynamic> packet = jsonDecode(rawJson);
+      String msgId = packet['msgId'];
+      String sender = packet['sender'];
+      String target = packet['target'];
+      String content = packet['content'];
 
-    if (target == myUniqueId) {
-      // Message amari jonno asche!
-      setState(() {
-        messages.add("From $sender: $body");
-      });
-    } else {
-      // Amari jonno na, tai networking routing onujayi message arekjonke pass forward korbo
-      forwardMessage(jsonStr);
+      // Step A: Ei unique message ti ami age dekhchi? Dekhle skip (Loop prevention)
+      if (processedMessages.containsKey(msgId)) return;
+
+      // Mark as seen/processed
+      processedMessages[msgId] = true;
+
+      // Step B: Message ta ki amar jonno asche?
+      if (target == myUniqueId) {
+        setState(() {
+          chatHistory.add("📩 [$sender]: $content");
+        });
+      } else {
+        // Step C: Amar jonno na! Tar mane ami rasta (Hop point). Ebar baki shobaike forward kori.
+        setState(() {
+          chatHistory.add("🔄 Forwarded packet: $msgId from $sender to $target");
+        });
+        floodPacketToNeighbors(rawJson);
+      }
+    } catch (e) {
+      debugPrint("Packet Parsing Error: $e");
     }
   }
 
-  // Routing Function
-  void sendMessage(String target, String body) {
+  void initiateMessage(String destination, String messageText) {
+    String uniqueMsgId = const Uuid().v4().substring(0, 6);
+    
     Map<String, dynamic> packet = {
-      'msgId': Random().nextInt(100000).toString(),
+      'msgId': uniqueMsgId,
       'sender': myUniqueId,
-      'target': target,
-      'body': body
+      'target': destination.toUpperCase().trim(),
+      'content': messageText
     };
-    
-    String jsonStr = jsonEncode(packet);
-    
-    // Tar kache thaka shob direct connected node e message pathano
-    connectedDevices.forEach((id, value) {
-      Nearby().sendBytesPayload(id, Uint8List.fromList(utf8.encode(jsonStr)));
-    });
-    
+
+    String payloadString = jsonEncode(packet);
+    processedMessages[uniqueMsgId] = true; // Set current user message tracking
+
+    floodPacketToNeighbors(payloadString);
+
     setState(() {
-      messages.add("To $target: $body");
+      chatHistory.add("📤 Sent to [$destination]: $messageText");
     });
   }
 
-  void forwardMessage(String jsonStr) {
-    // Message forward kora onno device gulote jara direct connected ache
-    connectedDevices.forEach((id, value) {
-      Nearby().sendBytesPayload(id, Uint8List.fromList(utf8.encode(jsonStr)));
+  void floodPacketToNeighbors(String packetData) {
+    // Tar kache thaka dynamic net-er shob bonded device e data throw kora
+    connectedNeighbors.forEach((endpointId, _) {
+      Nearby().sendBytesPayload(endpointId, Uint8List.fromList(utf8.encode(packetData)));
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("Mesh ID: $myUniqueId (Active Nodes: ${connectedDevices.length})")),
+      appBar: AppBar(
+        title: Text("TNET Peer: $myUniqueId"),
+        actions: [
+          Chip(
+            label: Text("Peers: ${connectedNeighbors.length}"),
+            backgroundColor: Colors.green,
+          ),
+          const SizedBox(width: 10),
+        ],
+      ),
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(8.0),
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
             child: TextField(
               controller: _targetIdController,
-              decoration: const InputDecoration(labelText: "Target Unique ID (e.g. Jessore User)"),
+              decoration: const InputDecoration(
+                labelText: "Target Device Unique ID (Jessore Peer)",
+                border: OutlineInputBorder(),
+              ),
             ),
           ),
-          Padding(
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: chatHistory.length,
+              itemBuilder: (context, index) => Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  value: Text(chatHistory[index]),
+                ),
+              ),
+            ),
+          ),
+          Container(
             padding: const EdgeInsets.all(8.0),
+            color: Colors.black26,
             child: Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _msgController,
-                    decoration: const InputDecoration(labelText: "Type Message"),
+                    decoration: const InputDecoration(hintText: "Type offline message..."),
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.send),
+                  icon: const Icon(Icons.send, color: Colors.blueAccent),
                   onPressed: () {
                     if (_targetIdController.text.isNotEmpty && _msgController.text.isNotEmpty) {
-                      sendMessage(_targetIdController.text, _msgController.text);
+                      initiateMessage(_targetIdController.text, _msgController.text);
                       _msgController.clear();
                     }
                   },
-                )
+                ),
               ],
-            ),
-          ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: messages.length,
-              itemBuilder: (c, i) => ListTile(title: Text(messages[i])),
             ),
           ),
         ],
