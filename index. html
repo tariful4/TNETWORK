@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TNET - Offline Mesh Network</title>
+</head>
+<body>
+    <h1>Welcome to TNET Project</h1>
+    <p>This is an internet-free device-to-device mesh communication application.</p>
+</body>
+</html>
